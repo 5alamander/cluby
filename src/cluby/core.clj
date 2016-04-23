@@ -2,13 +2,33 @@
 ;;; simulate OOP for ruby
 
 (declare OBJECT CLASS MODULE class-find-method
-         object-default-state class-default-state get-class-state)
+         object-default-state class-default-state get-object-state)
 
 (def ^:dynamic self nil)                ; bind self to thiz
 
 (def ^:dynamic *current-class* nil)
 
+(def ^:dynamic *self-class* nil)
+
+(def ^:dynamic *self-state* nil)
+
+(def ^:dynamic *self-variables* nil)
+
 (def ^:dynamic *class-in-built* nil)    ; use when building class
+
+(defn module-find-method [modules method-name]
+  (loop [[m & rest-m] modules]
+    (when m (if-let [method (method-name (m :ins-methods))]
+              method (recur rest-m)))))
+
+;;; find method in instance-methods, return [method, witch-class]
+(defn class-find-method [klass method-name]
+  (or (if-let [method ((klass :ins-methods) method-name)]
+        [method klass])                 ; find method in current class
+      (if-let [method (module-find-method (get-object-state klass :modules) method-name)]
+        [method klass])                 ; find method in modules
+      (if-let [super-class (klass :superclass)]
+        (recur super-class method-name)))) ; find method in superclass
 
 ;;; send message to obj, with the klass (current class, or super class)
 (defn- object-send-message [klass dstate command args]
@@ -21,19 +41,11 @@
     (binding [self (:self dstate), *current-class* the-klass]
       (apply method args))))
 
-(defn module-find-method [modules method-name]
-  (loop [[m & rest-m] modules]
-    (when m (if-let [method (method-name (m :ins-methods))]
-              method (recur rest-m)))))
-
-;;; find method in instance-methods, return [method, witch-class]
-(defn class-find-method [klass method-name]
-  (or (if-let [method ((klass :ins-methods) method-name)]
-        [method klass])                 ; find method in current class
-      (if-let [method (module-find-method (get-class-state klass :modules) method-name)]
-        [method klass])                 ; find method in modules
-      (if-let [super-class (klass :superclass)]
-        (recur super-class method-name)))) ; find method in superclass
+(defn- object-send-message-try [klass dstate command args]
+  (let [[method the-klass] (class-find-method klass command)]
+    (when method
+      (binding [self (:self dstate), *current-class* the-klass]
+        (apply method args)))))
 
 (defn object-new [klass variables-map state-map]
   ;; set instance variables when create
@@ -53,7 +65,9 @@
               :super (let [[command & args] args ; get the superclass
                            klass (*current-class* :superclass)]
                        (object-send-message klass @state command args))
-              (binding [*current-class* (or (:eigenclass @state) (:class @state))]
+              (binding [*self-class* klass ; bind evn
+                        *self-state* state, *self-variables* variables
+                        *current-class* (or (:eigenclass @state) (:class @state))]
                 (object-send-message *current-class* @state command args))))
           ;; set variables and state to meta data
           {:type :cluby-object
@@ -76,8 +90,11 @@
 (defn set-instance-methods [klass methods]
   (swap! ((meta klass) :state) update :ins-methods merge methods))
 
-(defn get-class-state [klass key]
-  (@((meta klass) :state) key))
+(defn get-object-state [obj key]
+  (@((meta obj) :state) key))
+
+(defn get-object-states [obj]
+  @((meta obj) :state))
 
 ;;; --- eigenclass for object ---
 
@@ -105,23 +122,31 @@
           (swap! state assoc :eigenclass eigenclass)
           eigenclass))))
 
-(defn set-object-method [obj key f]
-  ;; set to eigenclass
+(defn singleton-method-add [obj key f]
   (let [eigenclass (get-object-eigenclass obj)]
+    ;; ;TODO: invoke singleton-method-ad
     (swap! ((meta eigenclass) :state) update :ins-methods assoc key f)))
+
+(defn singletion-method-remove [obj key]
+  ;; ;TODO:
+  )
+
+(defn singleton-method-undefine [obj key]
+  ;; ;TODO:
+  )
 
 ;;; --- class functions ----
 
 (defn class-allocate-obj [klass]
   (let [obj (object-new klass nil object-default-state)]
-    (set-state obj :class-symbol (get-class-state klass :class-symbol))
+    (set-state obj :class-symbol (get-object-state klass :class-symbol))
     obj))
 
 ;;; set superclass of class-object and generate eigenclass
 (defn class-set-superclass [klass superclass]
   (set-state klass :superclass superclass) ; set superclass then set eigen superclass
-  (if-let [supereigen (get-class-state superclass :eigenclass)]
-    (let [eigen-name (str "#" (get-class-state klass :name))]
+  (if-let [supereigen (get-object-state superclass :eigenclass)]
+    (let [eigen-name (str "#" (get-object-state klass :name))]
       (set-state klass :eigenclass (eigenclass-create eigen-name supereigen)))
     (throw (RuntimeException.
             (str "create class, the superclass without eigenclass")))))
@@ -154,11 +179,9 @@
           :ins-methods
           {:allocate (fn allocate [] (class-allocate-obj self))
            :new (fn new [& args]
-                  (let [the-obj (class-allocate-obj self)
-                        [init-method the-klass] (class-find-method self :initialize)]
-                    (when init-method
-                      (binding [self the-obj, *current-class* the-klass]
-                        (apply init-method args)))
+                  (let [the-obj (class-allocate-obj self)]
+                    (object-send-message-try self (get-object-states the-obj)
+                                             :initialize args)
                     the-obj))
            :superclass (fn superclass [] (self :get-state :superclass))}}))
 
@@ -178,8 +201,7 @@
                             :eigenclass (eigenclass-create "#BASIC-OBJECT" CLASS)})
   (def OBJECT (class-new 'OBJECT BASIC-OBJECT))
   (set-instance-methods
-   OBJECT {
-           :class (fn class [] (self :get-state :class))
+   OBJECT {:class (fn class [] (self :get-state :class))
            :to-s (fn to-s [] (str "<" ((self :class) :name) ":" self ">"))})
 
   ;; def MODULE
@@ -205,7 +227,7 @@
    `(set-instance-method
      *class-in-built* ~(keyword method) ~(conj fnbody method 'fn)))
   ([target method fnbody]
-   `(set-object-method
+   `(singleton-method-add
      ~target ~(keyword method) ~(conj fnbody method 'fn))))
 
 (defmacro extends "
@@ -254,3 +276,9 @@
 ;;     `(def ~class-name (new-class '~class-name #'~parent-class ~fns))))
 
 
+;TODO: extend module in object
+
+;;; load helper files
+(load "core_object")
+(load "core_class")
+(load "core_module")

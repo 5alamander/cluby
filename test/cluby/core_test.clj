@@ -127,12 +127,19 @@
 
 (def em1 (Empty1 :new))
 
+(def m1 (MyClass :new))
+(def m2 (MyClass :new))
+
+(m1 :extend Amodule)
+
 (t/deftest module-test
   (t/testing "module-test"
     (t/is (= (em :a) :module2-a))
     (t/is (= (em :b) :module-b)))
   (t/testing "in sub class"
     (t/is (= (em1 :b) :module-b)))
+  (t/testing "in object"
+    (t/is (= (m1 :a) :module-a)))
   (t/testing "module eigen"
     (t/is (= (Amodule2 :a) :eigen-method))))
 

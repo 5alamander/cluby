@@ -71,6 +71,8 @@ mod = Module.allocate
 ```
 在不使用黑魔法的前提下，ruby没有原生的重载方法（[ruby黑魔法实现]()）
 
+关于参数个数的问题请参考[Proc#arity](http://ruby-doc.org/core-2.3.0/Proc.html#method-i-arity)
+
 ```ruby
 # ruby
 class MyClass
