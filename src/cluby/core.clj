@@ -280,5 +280,3 @@
 
 ;;; load helper files
 (load "core_object")
-(load "core_class")
-(load "core_module")
